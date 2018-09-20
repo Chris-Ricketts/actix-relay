@@ -1,0 +1,58 @@
+use actix::prelude::*;
+use actix_broker::BrokerMsg;
+use bytes::Bytes;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use bincode::{serialize, deserialize};
+
+use std::any::TypeId;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+pub trait RelayMessage: BrokerMsg + Serialize + DeserializeOwned {
+    fn tag() -> u64;
+    fn into_relay_data(self) -> RelayData;
+    fn from_byte_slice(bs: &[u8]) -> Option<Self>;
+}
+
+impl<M> RelayMessage for M
+where 
+    M: BrokerMsg + Serialize + DeserializeOwned
+{
+    fn tag() -> u64 {
+        let type_id = TypeId::of::<M>();
+        let mut hasher = DefaultHasher::new();
+        type_id.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn into_relay_data(self) -> RelayData {
+        let payload = serialize(&self).unwrap();
+        let tag = Self::tag();
+        let rd = TaggedData {
+            tag, 
+            data: payload
+        };
+        let serialized = serialize(&rd).unwrap();
+        RelayData(Bytes::from(serialized))
+    }
+
+    fn from_byte_slice(bs: &[u8]) -> Option<M> {
+        deserialize::<M>(bs).ok()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TaggedData {
+    pub tag: u64, 
+    pub data: Vec<u8>,
+}
+
+impl TaggedData {
+    pub fn from_relay_data(rd: RelayData) -> Option<TaggedData> {
+        deserialize::<Self>(&rd.0).ok()
+    }
+}
+
+#[derive(Message)]
+pub struct RelayData(Bytes);
