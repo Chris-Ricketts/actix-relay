@@ -55,4 +55,4 @@ impl TaggedData {
 }
 
 #[derive(Message)]
-pub struct RelayData(Bytes);
+pub struct RelayData(pub Bytes);

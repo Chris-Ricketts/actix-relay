@@ -10,39 +10,40 @@ use msgs::*;
 
 type HandlerFn = Fn(&RelayDevice, &[u8]);
 type SubscribeFn = Fn(&RelayDevice, &mut Context<RelayDevice>);
+type SetupFn = FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
+            -> Result<RelayDataStream>;
 type RelayTx = UnboundedSender<RelayData>;
 pub type RelayRx = UnboundedReceiver<RelayData>;
+pub type RelayDataStream = Box<Stream<Item = RelayData, Error = Error>>;
 
 struct DeviceSetup<F>(F);
-struct RelayDataStream<S>(S);
 
 pub struct RelayDevice {
     name: Option<String>,
-    tx: RelayTx, 
+    tx: Option<RelayTx>,
+    setup: Box<SetupFn>,
     handlers: HashMap<u64, Box<HandlerFn>>,
 }
 
-pub struct RelayDeviceBuilder<F, S>
+pub struct RelayDeviceBuilder<F>
 where
-    S: Stream<Item = RelayData, Error = Error>,
     F: FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-        -> Result<RelayDataStream<S>>,
+            -> Result<RelayDataStream>
 {
-    setup: DeviceSetup<F>,
+    setup: Box<SetupFn>,
     name: Option<String>,
     subs: Vec<Box<SubscribeFn>>,
     handlers: HashMap<u64, Box<HandlerFn>>,
 }
 
 impl RelayDevice {
-    fn new<F, S>(f: F) -> RelayDeviceBuilder<F, S>
+    fn new<F>(f: F) -> RelayDeviceBuilder<F>
     where
-        S: Stream<Item = RelayData, Error = Error>,
         F: FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-            -> Result<RelayDataStream<S>>,
+            -> Result<RelayDataStream>
     {
         RelayDeviceBuilder {
-            setup: DeviceSetup(f),
+            setup: Box::new(f),
             name: None,
             subs: Vec::new(),
             handlers: HashMap::new()
@@ -50,18 +51,17 @@ impl RelayDevice {
     }
 }
 
-impl<F, S> RelayDeviceBuilder<F, S> 
+impl<F> RelayDeviceBuilder<F> 
 where
-    S: Stream<Item = RelayData, Error = Error> + 'static,
     F: FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-        -> Result<RelayDataStream<S>>,
+            -> Result<RelayDataStream>
 {
-    fn with_name(mut self, name: &str) -> RelayDeviceBuilder<F, S> {
+    fn with_name(mut self, name: &str) -> RelayDeviceBuilder<F> {
         self.name = Some(name.to_owned());
         self
     }
 
-    fn add_sub<M: RelayMessage>(mut self) -> RelayDeviceBuilder<F, S> {
+    fn add_sub<M: RelayMessage>(mut self) -> RelayDeviceBuilder<F> {
         let sub = |dev: &RelayDevice, ctx: &mut Context<RelayDevice>| {
             dev.subscribe_async::<M>(ctx);
         };
@@ -79,11 +79,10 @@ where
         let (tx, rx) = unbounded();
         let dev = RelayDevice {
             name: self.name,
-            tx: tx,
+            tx: None,
+            setup: self.setup,
             handlers: self.handlers,
         };
-        let incoming = self.setup.0(&dev, rx, ctx)?;
-        ctx.add_stream(incoming.0);
         for sub in self.subs {
             sub(&dev, ctx);
         }
@@ -93,6 +92,9 @@ where
 
 impl Actor for RelayDevice {
     type Context = Context<Self>;
+
+    fn started(&mut self, &mut Self::Context) {
+        self.setup(self,
 }
 
 impl<M: RelayMessage> Handler<M> for RelayDevice {
@@ -127,13 +129,51 @@ impl StreamHandler<RelayData, Error> for RelayDevice {
 mod test {
     extern crate tokio;
 
+    use futures::Stream;
+    use futures::stream::once;
+    //use tokio::codec::BytesCodec;
+    //use tokio::net::{UdpSocket, UdpFramed};
+    use actix::prelude::*;
+    use bytes::Bytes;
+    //use std::net::{SocketAddr, IpAddr, Ipv4Addr};
+
     use super::*;
     use msgs::*;
 
-    fn setup_udp(dev: &RelayDevice, rx: RelayRx, ctx: &mut Context<RelayDevice>) {
-    }
+    #[derive(Clone, Message, Serialize, Deserialize)]
+    struct TestMessage;
+
+    //fn setup_udp(dev: &RelayDevice, rx: RelayRx, ctx: &mut Context<RelayDevice>) 
+    //    -> Result<RelayDataStream> 
+    //{
+    //    //let src = "127.0.0.1:8000".parse()?;
+    //    //let dst = "127.0.0.1:9000".parse()?;
+    //    //
+    //    //let sck = UdpSocket::bind(&src)?;
+
+    //    //let (w, r) = UdpFramed::new(sck, BytesCodec::new()).split();
+    //    //
+    //    //let send_all_fut = 
+    //    //    w.send_all(rx.map(move |msg| (msg.0, dest_addr)))
+    //    //        .map_err(|_| ())
+    //    //        .map(|_| ())
+    //    //        .spawn(ctx);
+
+    //    Ok(r.map(|b| RelayData(b)))
+    //}
+
     #[test]
     fn device_builder_works() {
-        assert!(true);
+        System::run(|| {
+            let _ = RelayDevice::create(|ctx| {
+                RelayDevice::new(|_,_,_| 
+                                 Ok(Box::new(once::<RelayData, _>(Ok(RelayData(Bytes::new()))))))
+                    .with_name("test")
+                    .add_sub::<TestMessage>()
+                    .finish(ctx)
+                    .unwrap()
+            });
+            System::current().stop();
+        });
     }
 }

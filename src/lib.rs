@@ -10,6 +10,7 @@ extern crate serde_derive;
 
 mod msgs;
 mod device;
+mod service;
 
 #[cfg(test)]
 mod tests {
