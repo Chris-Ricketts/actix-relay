@@ -41,7 +41,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TaggedData {
     pub tag: u64, 
     pub data: Vec<u8>,

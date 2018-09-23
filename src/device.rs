@@ -11,7 +11,7 @@ type SubscribeFn<C> = Fn(&RelayDevice<C>, &mut Context<RelayDevice<C>>);
 
 pub trait RelayIOChild: Default + Actor<Context = Context<Self>> + Handler<RelayData> 
 {
-    fn forward_relay_data(rd: RelayData) {
+    fn forward_relay_data(&self, rd: RelayData) {
         RelayDevice::<Self>::from_registry().do_send(rd)
     }
 }
@@ -73,14 +73,14 @@ where
         let handler = |dev: &RelayDevice<C>, bs: &[u8]| {
             if let Some(msg) = M::from_byte_slice(bs) {
                 dev.issue_async(msg);
-            } // TODO Log failed parse - should not be possible.
+            }
         };
         self.handlers.insert(M::tag(), Box::new(handler));
         self
     }
 
-    pub fn finish(self) -> Addr<RelayDevice<C>> {
-        RelayDevice::<C>::create(|ctx| {
+    pub fn finish(self) {
+        let addr = RelayDevice::<C>::create(|ctx| {
             let dev = RelayDevice {
                 name: self.name,
                 io: Some(self.child.start()),
@@ -92,7 +92,9 @@ where
             }
 
             dev
-        })
+        });
+
+        System::current().registry().set(addr);
     }
 }
 
@@ -101,6 +103,11 @@ where
     C: RelayIOChild,
 {
     type Context = Context<Self>;
+
+    fn started(&mut self, _: &mut Self::Context) {
+        trace!("RelayDevice - {} started",
+               self.name.as_ref().unwrap_or(&"Unnamed".to_string()));
+    }
 }
 
 impl<C> SystemService for RelayDevice<C> 
@@ -125,13 +132,14 @@ where
         if let Some(ref io) = self.io {
             io.send(relay_data)
                 .into_actor(self)
+                .map_err(|_,_, ctx| ctx.stop())
                 .then(|_,_,_| fut::ok(()))
                 .spawn(ctx);
         }
     }
 }
 
-impl <C> Handler<RelayData> for RelayDevice<C>
+impl<C> Handler<RelayData> for RelayDevice<C>
 where 
     C: RelayIOChild,
 {
@@ -144,7 +152,7 @@ where
             }
         }
     }
-}
+} 
 
 #[cfg(test)]
 mod test {
