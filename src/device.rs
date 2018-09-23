@@ -1,49 +1,54 @@
 use actix::prelude::*;
+use actix::fut;
 use actix_broker::{BrokerSubscribe, BrokerIssue};
-use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
-use futures::Stream;
 
 use std::collections::HashMap;
-use std::io::{Error, Result};
 
 use msgs::*;
 
-type HandlerFn = Fn(&RelayDevice, &[u8]);
-type SubscribeFn = Fn(&RelayDevice, &mut Context<RelayDevice>);
-type SetupFn = FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-            -> Result<RelayDataStream>;
-type RelayTx = UnboundedSender<RelayData>;
-pub type RelayRx = UnboundedReceiver<RelayData>;
-pub type RelayDataStream = Box<Stream<Item = RelayData, Error = Error>>;
+type HandlerFn<C> = Fn(&RelayDevice<C>, &[u8]);
+type SubscribeFn<C> = Fn(&RelayDevice<C>, &mut Context<RelayDevice<C>>);
 
-struct DeviceSetup<F>(F);
-
-pub struct RelayDevice {
-    name: Option<String>,
-    tx: Option<RelayTx>,
-    setup: Box<SetupFn>,
-    handlers: HashMap<u64, Box<HandlerFn>>,
-}
-
-pub struct RelayDeviceBuilder<F>
-where
-    F: FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-            -> Result<RelayDataStream>
+pub trait RelayIOChild: Default + Actor<Context = Context<Self>> + Handler<RelayData> 
 {
-    setup: Box<SetupFn>,
-    name: Option<String>,
-    subs: Vec<Box<SubscribeFn>>,
-    handlers: HashMap<u64, Box<HandlerFn>>,
+    fn forward_relay_data(rd: RelayData) {
+        RelayDevice::<Self>::from_registry().do_send(rd)
+    }
 }
 
-impl RelayDevice {
-    fn new<F>(f: F) -> RelayDeviceBuilder<F>
-    where
-        F: FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-            -> Result<RelayDataStream>
+impl<A> RelayIOChild for A
+where 
+    A: Default + Actor<Context = Context<A>> + Handler<RelayData> 
+{}
+
+#[derive(Default)]
+pub struct RelayDevice<C> 
+where
+    C: RelayIOChild
+{
+    name: Option<String>,
+    io: Option<Addr<C>>,
+    handlers: HashMap<u64, Box<HandlerFn<C>>>,
+}
+
+pub struct RelayDeviceBuilder<C>
+where 
+    C: RelayIOChild,
+{
+    child: C,
+    name: Option<String>,
+    subs: Vec<Box<SubscribeFn<C>>>,
+    handlers: HashMap<u64, Box<HandlerFn<C>>>,
+}
+
+impl<C> RelayDevice<C> 
+where 
+    C: RelayIOChild,
+{
+    pub fn new() -> RelayDeviceBuilder<C>
     {
         RelayDeviceBuilder {
-            setup: Box::new(f),
+            child: C::default(),
             name: None,
             subs: Vec::new(),
             handlers: HashMap::new()
@@ -51,22 +56,21 @@ impl RelayDevice {
     }
 }
 
-impl<F> RelayDeviceBuilder<F> 
+impl<C> RelayDeviceBuilder<C> 
 where
-    F: FnOnce(&RelayDevice, RelayRx, &mut Context<RelayDevice>) 
-            -> Result<RelayDataStream>
+    C: RelayIOChild,
 {
-    fn with_name(mut self, name: &str) -> RelayDeviceBuilder<F> {
+    pub fn with_name(mut self, name: &str) -> RelayDeviceBuilder<C> {
         self.name = Some(name.to_owned());
         self
     }
 
-    fn add_sub<M: RelayMessage>(mut self) -> RelayDeviceBuilder<F> {
-        let sub = |dev: &RelayDevice, ctx: &mut Context<RelayDevice>| {
+    pub fn add_sub<M: RelayMessage>(mut self) -> RelayDeviceBuilder<C> {
+        let sub = |dev: &RelayDevice<C>, ctx: &mut Context<RelayDevice<C>>| {
             dev.subscribe_async::<M>(ctx);
         };
         self.subs.push(Box::new(sub));
-        let handler = |dev: &RelayDevice, bs: &[u8]| {
+        let handler = |dev: &RelayDevice<C>, bs: &[u8]| {
             if let Some(msg) = M::from_byte_slice(bs) {
                 dev.issue_async(msg);
             } // TODO Log failed parse - should not be possible.
@@ -75,105 +79,113 @@ where
         self
     }
 
-    fn finish(self, ctx: &mut Context<RelayDevice>) -> Result<RelayDevice> {
-        let (tx, rx) = unbounded();
-        let dev = RelayDevice {
-            name: self.name,
-            tx: None,
-            setup: self.setup,
-            handlers: self.handlers,
-        };
-        for sub in self.subs {
-            sub(&dev, ctx);
-        }
-        Ok(dev)
+    pub fn finish(self) -> Addr<RelayDevice<C>> {
+        RelayDevice::<C>::create(|ctx| {
+            let dev = RelayDevice {
+                name: self.name,
+                io: Some(self.child.start()),
+                handlers: self.handlers,
+            };
+
+            for sub in self.subs {
+                sub(&dev, ctx);
+            }
+
+            dev
+        })
     }
 }
 
-impl Actor for RelayDevice {
+impl<C> Actor for RelayDevice<C> 
+where 
+    C: RelayIOChild,
+{
     type Context = Context<Self>;
-
-    fn started(&mut self, &mut Self::Context) {
-        self.setup(self,
 }
 
-impl<M: RelayMessage> Handler<M> for RelayDevice {
+impl<C> SystemService for RelayDevice<C> 
+where 
+    C: RelayIOChild,
+{}
+
+impl<C> Supervised for RelayDevice<C> 
+where 
+    C: RelayIOChild,
+{}
+
+impl<M, C> Handler<M> for RelayDevice<C> 
+where
+    M: RelayMessage,
+    C: RelayIOChild,
+{
     type Result = ();
 
-    fn handle(&mut self, msg: M, _ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: M, ctx: &mut Self::Context) {
         let relay_data = msg.into_relay_data();
-        if let Err(_) = self.tx.unbounded_send(relay_data) {
-            // TODO Send 'Teardown' to parent service
-            unimplemented!();
+        if let Some(ref io) = self.io {
+            io.send(relay_data)
+                .into_actor(self)
+                .then(|_,_,_| fut::ok(()))
+                .spawn(ctx);
         }
     }
 }
 
-impl StreamHandler<RelayData, Error> for RelayDevice {
+impl <C> Handler<RelayData> for RelayDevice<C>
+where 
+    C: RelayIOChild,
+{
+    type Result = ();
+
     fn handle(&mut self, msg: RelayData, ctx: &mut Self::Context) {
         if let Some(tagged_data) = TaggedData::from_relay_data(msg) {
-           if let Some(handler) = self.handlers.get(&tagged_data.tag) {
-               handler(self, &tagged_data.data);
-           }
+            if let Some(handler) = self.handlers.get(&tagged_data.tag) {
+                handler(self, &tagged_data.data);
+            }
         }
-    }
-
-    fn error(&mut self, err: Error, ctx: &mut Self::Context) -> Running {
-        // TODO Send 'Teardown' to parent service
-        unimplemented!();
-        Running::Stop
     }
 }
 
 #[cfg(test)]
 mod test {
-    extern crate tokio;
-
-    use futures::Stream;
-    use futures::stream::once;
-    //use tokio::codec::BytesCodec;
-    //use tokio::net::{UdpSocket, UdpFramed};
     use actix::prelude::*;
-    use bytes::Bytes;
-    //use std::net::{SocketAddr, IpAddr, Ipv4Addr};
+    use actix_broker::BrokerIssue;
 
+    use std::time::Duration;
+
+    use msgs::RelayData;
     use super::*;
-    use msgs::*;
 
     #[derive(Clone, Message, Serialize, Deserialize)]
-    struct TestMessage;
+    struct TestRelayMessage;
 
-    //fn setup_udp(dev: &RelayDevice, rx: RelayRx, ctx: &mut Context<RelayDevice>) 
-    //    -> Result<RelayDataStream> 
-    //{
-    //    //let src = "127.0.0.1:8000".parse()?;
-    //    //let dst = "127.0.0.1:9000".parse()?;
-    //    //
-    //    //let sck = UdpSocket::bind(&src)?;
+    #[derive(Default)]
+    struct DummyIOChild;
 
-    //    //let (w, r) = UdpFramed::new(sck, BytesCodec::new()).split();
-    //    //
-    //    //let send_all_fut = 
-    //    //    w.send_all(rx.map(move |msg| (msg.0, dest_addr)))
-    //    //        .map_err(|_| ())
-    //    //        .map(|_| ())
-    //    //        .spawn(ctx);
+    impl Actor for DummyIOChild {
+        type Context = Context<Self>;
 
-    //    Ok(r.map(|b| RelayData(b)))
-    //}
+        fn started(&mut self, ctx: &mut Self::Context) {
+            self.issue_async(TestRelayMessage);
+        }
+    }
+
+    impl Handler<RelayData> for DummyIOChild {
+        type Result = ();
+
+        fn handle(&mut self, msg: RelayData, _ctx: &mut Self::Context) {
+            assert_eq!(msg.0, TestRelayMessage.into_relay_data().0);
+            System::current().stop();
+        }
+    }
 
     #[test]
-    fn device_builder_works() {
+    fn relay_device_works() {
         System::run(|| {
-            let _ = RelayDevice::create(|ctx| {
-                RelayDevice::new(|_,_,_| 
-                                 Ok(Box::new(once::<RelayData, _>(Ok(RelayData(Bytes::new()))))))
-                    .with_name("test")
-                    .add_sub::<TestMessage>()
-                    .finish(ctx)
-                    .unwrap()
-            });
-            System::current().stop();
+            let _ = RelayDevice::<DummyIOChild>::new()
+                .with_name("test")
+                .add_sub::<TestRelayMessage>()
+                .finish();
         });
     }
 }

@@ -10,7 +10,16 @@ extern crate serde_derive;
 
 mod msgs;
 mod device;
-mod service;
+
+pub use msgs::{
+    RelayMessage,
+    RelayData,
+};
+
+pub use device::{
+    RelayDevice,
+    RelayIOChild,
+};
 
 #[cfg(test)]
 mod tests {

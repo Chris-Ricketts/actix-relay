@@ -1,4 +1,3 @@
-use actix::prelude::*;
 use actix_broker::BrokerMsg;
 use bytes::Bytes;
 use serde::Serialize;
@@ -54,5 +53,34 @@ impl TaggedData {
     }
 }
 
+// TODO Change result type to io::Result<()> 
+// Possibly just implement Message for Bytes? 
 #[derive(Message)]
 pub struct RelayData(pub Bytes);
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq,  Message, Serialize, Deserialize)]
+    enum TestMessage {
+        Op1,
+        Op2,
+        Op3,
+    }
+
+    #[test]
+    fn relay_message_to_relay_data_and_back() {
+        let msg = TestMessage::Op1;
+
+        let relay_data = msg.into_relay_data();
+
+        let tagged_data = TaggedData::from_relay_data(relay_data).unwrap();
+
+        assert_eq!(tagged_data.tag, TestMessage::tag());
+
+        let reconstructed = TestMessage::from_byte_slice(&tagged_data.data);
+
+        assert_eq!(reconstructed, Some(TestMessage::Op1));
+    }
+}
