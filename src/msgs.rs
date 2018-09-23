@@ -48,7 +48,7 @@ pub struct TaggedData {
 }
 
 impl TaggedData {
-    pub fn from_relay_data(rd: RelayData) -> Option<TaggedData> {
+    pub fn from_relay_data(rd: &RelayData) -> Option<TaggedData> {
         deserialize::<Self>(&rd.0).ok()
     }
 }
