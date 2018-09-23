@@ -137,7 +137,7 @@ where
 {
     type Result = ();
 
-    fn handle(&mut self, msg: RelayData, ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: RelayData, _ctx: &mut Self::Context) {
         if let Some(tagged_data) = TaggedData::from_relay_data(msg) {
             if let Some(handler) = self.handlers.get(&tagged_data.tag) {
                 handler(self, &tagged_data.data);
@@ -165,7 +165,7 @@ mod test {
     impl Actor for DummyIOChild {
         type Context = Context<Self>;
 
-        fn started(&mut self, ctx: &mut Self::Context) {
+        fn started(&mut self, _ctx: &mut Self::Context) {
             self.issue_async(TestRelayMessage);
         }
     }
