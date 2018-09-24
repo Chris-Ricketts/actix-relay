@@ -58,6 +58,12 @@ impl TaggedData {
 #[derive(Message)]
 pub struct RelayData(pub Bytes);
 
+impl From<Bytes> for RelayData {
+    fn from(bytes: Bytes) -> RelayData {
+        RelayData(bytes)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -75,7 +81,7 @@ mod test {
 
         let relay_data = msg.into_relay_data();
 
-        let tagged_data = TaggedData::from_relay_data(relay_data).unwrap();
+        let tagged_data = TaggedData::from_relay_data(&relay_data).unwrap();
 
         assert_eq!(tagged_data.tag, TestMessage::tag());
 

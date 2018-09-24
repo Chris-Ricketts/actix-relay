@@ -11,8 +11,8 @@ type SubscribeFn<C> = Fn(&RelayDevice<C>, &mut Context<RelayDevice<C>>);
 
 pub trait RelayIOChild: Default + Actor<Context = Context<Self>> + Handler<RelayData> 
 {
-    fn forward_relay_data(&self, rd: RelayData) {
-        RelayDevice::<Self>::from_registry().do_send(rd)
+    fn forward_relay_data<D: Into<RelayData>>(&self, d: D) {
+        RelayDevice::<Self>::from_registry().do_send(d.into())
     }
 }
 
