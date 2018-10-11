@@ -75,6 +75,10 @@ where
                 dev.issue_async(msg);
             }
         };
+        trace!("RelayDevice({}): Adding handler for {}",
+            self.name.as_ref().unwrap_or(&"unnamed".to_string()),
+            M::tag());
+
         self.handlers.insert(M::tag(), Box::new(handler));
         self
     }
@@ -148,7 +152,14 @@ where
     fn handle(&mut self, msg: RelayData, _ctx: &mut Self::Context) {
         if let Some(tagged_data) = TaggedData::from_relay_data(&msg) {
             if let Some(handler) = self.handlers.get(&tagged_data.tag) {
+                trace!("RelayDevice({}): Found hanger for {}",
+                    self.name.as_ref().unwrap_or(&"unnamed".to_string()),
+                    tagged_data.tag);
                 handler(self, &tagged_data.data);
+            } else {
+                trace!("RelayDevice({}): Failed to find handler for {}",
+                    self.name.as_ref().unwrap_or(&"unnamed".to_string()),
+                    tagged_data.tag);
             }
         }
     }

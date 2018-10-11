@@ -15,6 +15,7 @@ mod device;
 
 pub use msgs::{
     RelayMessage,
+    RelayMessageID,
     RelayData,
 };
 

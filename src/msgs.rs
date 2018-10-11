@@ -8,22 +8,26 @@ use std::any::TypeId;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-pub trait RelayMessage: BrokerMsg + Serialize + DeserializeOwned {
+pub trait RelayMessageID {
     fn tag() -> u64;
+}
+
+pub trait RelayMessage: BrokerMsg + RelayMessageID +Serialize + DeserializeOwned {
+    //fn tag() -> u64;
     fn into_relay_data(self) -> RelayData;
     fn from_byte_slice(bs: &[u8]) -> Option<Self>;
 }
 
 impl<M> RelayMessage for M
 where 
-    M: BrokerMsg + Serialize + DeserializeOwned
+    M: BrokerMsg + RelayMessageID +Serialize + DeserializeOwned
 {
-    fn tag() -> u64 {
-        let type_id = TypeId::of::<M>();
-        let mut hasher = DefaultHasher::new();
-        type_id.hash(&mut hasher);
-        hasher.finish()
-    }
+    //fn tag() -> u64;// {
+    //    let type_id = TypeId::of::<M>();
+    //    let mut hasher = DefaultHasher::new();
+    //    type_id.hash(&mut hasher);
+    //    hasher.finish()
+    //}
 
     fn into_relay_data(self) -> RelayData {
         let payload = serialize(&self).unwrap();
